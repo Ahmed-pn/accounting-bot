@@ -1,132 +1,94 @@
 """
-وحدة قاعدة البيانات - بوت المحاسبة
-كل تاجر/مستخدم عنده سجل عمليات منفصل حسب معرف تيليغرام تبعه (user_id)
+وحدة الذكاء الاصطناعي - تفهم رسائل نصية وصوتية حرة وتحولها لعملية محاسبية
+تستخدم Gemini من Google (مجاني بحدود سخية جدًا: https://aistudio.google.com)
 """
-import sqlite3
-from datetime import datetime, date
-from contextlib import contextmanager
+import os
+import json
+import logging
 
-DB_PATH = "accounting.db"
+import google.generativeai as genai
+
+logger = logging.getLogger(__name__)
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+MODEL_NAME = "gemini-2.0-flash"
+
+SYSTEM_PROMPT = """
+أنت مساعد محاسبة لمحل تجاري (أي نوع محل: بقالية، صيدلية، عيادة، محل ملابس، إلخ).
+مهمتك تحليل رسالة المستخدم (نصية أو صوتية، بالعربية الفصحى أو العامية السورية)
+واستخراج JSON فقط بدون أي شرح، بهالشكل بالضبط:
+
+{
+  "action": "sale" | "expense" | "purchase" | "debt_i_owe" | "debt_owed_to_me" | "settle" | "unknown",
+  "amount": رقم أو null,
+  "description": "وصف قصير للعملية أو الصنف" أو "",
+  "customer_name": "اسم الزبون" أو null,
+  "person_name": "اسم الشخص المرتبط بالدين" أو null
+}
+
+قواعد تحديد action:
+- sale: المستخدم باع شي (بعت، بيع، صرفت بضاعة لزبون بمبلغ)
+- expense: مصروف عام على المحل (كهرباء، إيجار، صيانة...)
+- purchase: اشترى بضاعة/مواد ليعيد بيعها أو يستخدمها بالمحل
+- debt_i_owe: المستخدم عليه دين لشخص معين (استخدم person_name)
+- debt_owed_to_me: شخص معين عليه دين للمستخدم (استخدم person_name)
+- settle: المستخدم بدو يسدد دين شخص معين (استخدم person_name، بدون amount لازم)
+- unknown: إذا الرسالة مش واضحة أو مش متعلقة بمحاسبة إطلاقًا
+
+أرجع JSON فقط، بدون ```json وبدون أي نص قبله أو بعده.
+"""
 
 
-def init_db():
-    """إنشاء الجداول إذا ما كانت موجودة"""
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                type TEXT NOT NULL,           -- 'sale' أو 'expense'
-                amount REAL NOT NULL,
-                description TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS debts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                direction TEXT NOT NULL,      -- 'owed_to_me' أو 'i_owe'
-                person_name TEXT NOT NULL,
-                amount REAL NOT NULL,
-                note TEXT,
-                settled INTEGER DEFAULT 0,    -- 0 = لسا مو متسدد, 1 = تسدد
-                created_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-
-
-@contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+def _extract_json(raw_text: str) -> dict:
+    text = raw_text.strip()
+    text = text.replace("```json", "").replace("```", "").strip()
     try:
-        yield conn
-    finally:
-        conn.close()
+        data = json.loads(text)
+        return {
+            "action": data.get("action", "unknown"),
+            "amount": data.get("amount"),
+            "description": data.get("description") or "",
+            "customer_name": data.get("customer_name"),
+            "person_name": data.get("person_name"),
+        }
+    except Exception as e:
+        logger.warning(f"فشل تحليل رد الذكاء الاصطناعي: {e} — الرد: {raw_text}")
+        return {"action": "unknown", "amount": None, "description": "", "customer_name": None, "person_name": None}
 
 
-# ---------- المبيعات والمصاريف ----------
-
-def add_transaction(user_id: int, tx_type: str, amount: float, description: str = ""):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO transactions (user_id, type, amount, description, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, tx_type, amount, description, datetime.now().isoformat())
-        )
-        conn.commit()
-        return cur.lastrowid
+def _empty_result():
+    return {"action": "unknown", "amount": None, "description": "", "customer_name": None, "person_name": None}
 
 
-def get_balance(user_id: int, since: str = None):
-    """يرجع (مجموع المبيعات، مجموع المصاريف، الصافي)"""
-    with get_conn() as conn:
-        cur = conn.cursor()
-        query = "SELECT type, SUM(amount) FROM transactions WHERE user_id = ?"
-        params = [user_id]
-        if since:
-            query += " AND created_at >= ?"
-            params.append(since)
-        query += " GROUP BY type"
-        cur.execute(query, params)
-        rows = dict(cur.fetchall())
-        sales = rows.get("sale", 0) or 0
-        expenses = rows.get("expense", 0) or 0
-        return sales, expenses, sales - expenses
+def is_configured() -> bool:
+    return bool(GEMINI_API_KEY)
 
 
-def get_recent_transactions(user_id: int, limit: int = 10):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT type, amount, description, created_at FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-            (user_id, limit)
-        )
-        return cur.fetchall()
+def parse_text(text: str) -> dict:
+    if not is_configured():
+        return _empty_result()
+    try:
+        model = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_PROMPT)
+        response = model.generate_content(text)
+        return _extract_json(response.text)
+    except Exception as e:
+        logger.error(f"خطأ باستدعاء Gemini (نص): {e}")
+        return _empty_result()
 
 
-def get_today_since_iso():
-    return datetime.combine(date.today(), datetime.min.time()).isoformat()
-
-
-def get_month_since_iso():
-    today = date.today()
-    return datetime(today.year, today.month, 1).isoformat()
-
-
-# ---------- الديون ----------
-
-def add_debt(user_id: int, direction: str, person_name: str, amount: float, note: str = ""):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO debts (user_id, direction, person_name, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, direction, person_name, amount, note, datetime.now().isoformat())
-        )
-        conn.commit()
-        return cur.lastrowid
-
-
-def get_open_debts(user_id: int, direction: str = None):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        query = "SELECT id, direction, person_name, amount, note FROM debts WHERE user_id = ? AND settled = 0"
-        params = [user_id]
-        if direction:
-            query += " AND direction = ?"
-            params.append(direction)
-        cur.execute(query, params)
-        return cur.fetchall()
-
-
-def settle_debt(debt_id: int, user_id: int):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE debts SET settled = 1 WHERE id = ? AND user_id = ?",
-            (debt_id, user_id)
-        )
-        conn.commit()
-        return cur.rowcount > 0
+def parse_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> dict:
+    if not is_configured():
+        return _empty_result()
+    try:
+        model = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_PROMPT)
+        response = model.generate_content([
+            {"mime_type": mime_type, "data": audio_bytes},
+            "حلل هالرسالة الصوتية واستخرج الـ JSON المطلوب."
+        ])
+        return _extract_json(response.text)
+    except Exception as e:
+        logger.error(f"خطأ باستدعاء Gemini (صوت): {e}")
+        return _empty_result()
