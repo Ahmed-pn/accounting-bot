@@ -534,3 +534,235 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if lower == "💳 الديون":
         await list_debts(update, c
+                         async def recent_transactions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("➕ آخر المبيعات", callback_data="list:sale:all")],
+        [InlineKeyboardButton("➖ آخر المصاريف", callback_data="list:expense:all")],
+        [InlineKeyboardButton("🛒 آخر المشتريات", callback_data="list:purchase:all")],
+    ]
+    await update.message.reply_text("📋 شو بدك تشوف؟", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    owed_to_me = get_open_debts(user_id, "owed_to_me")
+    i_owe = get_open_debts(user_id, "i_owe")
+
+    if not owed_to_me and not i_owe:
+        await update.message.reply_text("💳 ما في ديون مفتوحة حاليًا. 🎉")
+        return
+
+    buttons = []
+    text = "💳 *الديون المفتوحة*\n\nاضغط (سدد ✅) لتسديد أي دين مباشرة.\n\n*إلك عند غيرك:*"
+    for debt in owed_to_me:
+        debt_id, name, amount, note = debt["id"], debt["person_name"], debt["amount"], debt["note"]
+        label = f"{name}: {amount:,.0f}" + (f" ({note})" if note else "")
+        buttons.append([
+            InlineKeyboardButton(f"👤 {label}", callback_data="noop"),
+            InlineKeyboardButton("سدد ✅", callback_data=f"settle:{debt_id}")
+        ])
+    if not owed_to_me:
+        text += "\n  ما في."
+
+    text += "\n\n*عليك لغيرك:*"
+    for debt in i_owe:
+        debt_id, name, amount, note = debt["id"], debt["person_name"], debt["amount"], debt["note"]
+        label = f"{name}: {amount:,.0f}" + (f" ({note})" if note else "")
+        buttons.append([
+            InlineKeyboardButton(f"👤 {label}", callback_data="noop"),
+            InlineKeyboardButton("سدد ✅", callback_data=f"settle:{debt_id}")
+        ])
+    if not i_owe:
+        text += "\n  ما في."
+
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    if data == "noop":
+        return
+
+    if data.startswith("inv:"):
+        inv_type = data.split(":")[1]
+        if inv_type == "sale":
+            await query.edit_message_text(
+                "📤 *إصدار فاتورة مبيعات*\n\n"
+                "قم بتصوير فاتورة المبيعات أو اكتب تفاصيلها هنا وسأسجلها كعملية مبيع (Sale).",
+                parse_mode="Markdown"
+            )
+        elif inv_type == "purchase":
+            await query.edit_message_text(
+                "📥 *إصدار فاتورة شراء*\n\n"
+                "قم بتصوير فاتورة الشراء أو اكتب تفاصيلها هنا وسأسجلها كعملية مشترى (Purchase).",
+                parse_mode="Markdown"
+            )
+        return
+
+    if data == "report:menu":
+        buttons = [
+            [InlineKeyboardButton("📅 اليوم", callback_data="report:today")],
+            [InlineKeyboardButton("🗓️ هالأسبوع", callback_data="report:week")],
+            [InlineKeyboardButton("📆 هالشهر", callback_data="report:month")],
+            [InlineKeyboardButton("📈 هالسنة", callback_data="report:year")],
+        ]
+        await query.edit_message_text("📊 اختار الفترة يلي بدك التقرير فيها:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("report:"):
+        period = data.split(":")[1]
+        await show_report(query, user_id, period)
+        return
+
+    if data.startswith("list:"):
+        _, tx_type, period = data.split(":")
+        period = None if period == "all" else period
+        await show_transactions_list(query, user_id, tx_type, period)
+        return
+
+    if data == "menu:transactions":
+        buttons = [
+            [InlineKeyboardButton("➕ آخر المبيعات", callback_data="list:sale:all")],
+            [InlineKeyboardButton("➖ آخر المصاريف", callback_data="list:expense:all")],
+            [InlineKeyboardButton("🛒 آخر المشتريات", callback_data="list:purchase:all")],
+        ]
+        await query.edit_message_text("📋 شو بدك تشوف؟", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("del:"):
+        _, tx_id, tx_type, period = data.split(":")
+        success = delete_transaction(int(tx_id), user_id)
+        period = None if period == "all" else period
+        if success:
+            await query.answer("✅ تم الحذف", show_alert=False)
+        await show_transactions_list(query, user_id, tx_type, period)
+        return
+
+    if data.startswith("settle:"):
+        debt_id = int(data.split(":")[1])
+        success = settle_debt(debt_id, user_id)
+        if success:
+            await query.edit_message_text(f"✅ تم تسديد الدين رقم #{debt_id} بنجاح.")
+        else:
+            await query.edit_message_text("⚠️ هالدين مو موجود أو تم تسديده مسبقًا.")
+        return
+
+
+async def execute_ai_result(update: Update, result: dict) -> bool:
+    action = result.get("action")
+    amount = result.get("amount")
+    desc = result.get("description") or ""
+    customer = result.get("customer_name")
+    person = result.get("person_name")
+    user_id = update.effective_user.id
+
+    if action in ("sale", "expense", "purchase") and amount is not None:
+        await add_transaction_reply(update, action, float(amount), desc, customer)
+        return True
+
+    if action == "debt_i_owe" and person and amount is not None:
+        add_debt(user_id, "i_owe", person, float(amount), desc)
+        await update.message.reply_text(f"✅ تسجّل: عليك دين لـ {person} بمبلغ {float(amount):,.0f}")
+        return True
+
+    if action == "debt_owed_to_me" and person and amount is not None:
+        add_debt(user_id, "owed_to_me", person, float(amount), desc)
+        await update.message.reply_text(f"✅ تسجّل: {person} إله عندك دين {float(amount):,.0f}")
+        return True
+
+    if action == "settle" and person:
+        success, amt, direction = settle_debt_by_name(user_id, person)
+        if success:
+            await update.message.reply_text(f"✅ تم تسديد دين {person} بمبلغ {amt:,.0f}")
+        else:
+            await update.message.reply_text(f"ما لقيت دين مفتوح باسم {person}.")
+        return True
+
+    return False
+
+
+async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw_text = update.message.text.strip()
+    lower = raw_text.strip()
+
+    if lower == "📊 التقارير":
+        await reports_menu(update, context)
+        return
+    if lower == "📋 آخر العمليات":
+        await recent_transactions_menu(update, context)
+        return
+    if lower == "💳 الديون":
+        await list_debts(update, context)
+        return
+    if lower == "📄 الفواتير":
+        await invoices_menu(update, context)
+        return
+    if lower == "➕ بيع":
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `بيع بضاعة لأحمد بـ 50000`", parse_mode="Markdown")
+        return
+    if lower == "➖ مصروف":
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `صرفت فاتورة كهرباء 20000`", parse_mode="Markdown")
+        return
+    if lower == "🛒 مشترى":
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `اشتريت بضاعة من المورد بـ 100000`", parse_mode="Markdown")
+        return
+
+    result = parse_text(raw_text)
+    handled = await execute_ai_result(update, result)
+    if handled:
+        return
+
+    await update.message.reply_text(
+        "ما فهمت عليك تماماً 🤔 جرب تصوير فاتورة 📸 أو اكتب بأسلوبك مثل:\n"
+        "`فاتورة شراء بـ 100 ألف` أو `مصروف كهرباء 20 ألف`",
+        parse_mode="Markdown"
+    )
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🎧 عم أسمع...")
+    voice = update.message.voice
+    tg_file = await context.bot.get_file(voice.file_id)
+    audio_bytes = bytes(await tg_file.download_as_bytearray())
+
+    result = parse_audio(audio_bytes, mime_type="audio/ogg")
+    handled = await execute_ai_result(update, result)
+    if not handled:
+        await update.message.reply_text("ما فهمت المقطع الصوتي 🤔 جرب تحكي بوضوح أكتر.")
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 عم أقرأ الفاتورة والصورة...")
+    
+    photo = update.message.photo[-1]
+    tg_file = await context.bot.get_file(photo.file_id)
+    photo_bytes = bytes(await tg_file.download_as_bytearray())
+
+    result = parse_image(photo_bytes, mime_type="image/jpeg")
+    handled = await execute_ai_result(update, result)
+    
+    if not handled:
+        await update.message.reply_text("⚠️ ما قدرت استخرج تفاصيل الفاتورة بدقة من الصورة. تأكد أن الصورة واضحة.")
+
+
+def main():
+    init_db()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
+
+    logger.info("البوت المحاسبي الذكي شغّال...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
+            
