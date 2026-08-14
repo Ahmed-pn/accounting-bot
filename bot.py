@@ -1,6 +1,6 @@
 """
 بوت محاسبة عام لأي محل تجاري - عبر تيليغرام
-يدعم: بيع / مصروف / مشترى / ديون / تقارير بفترات مختلفة + الفواتير وإدارة المخزون
+يدعم: بيع / مصروف / مشترى / ديون / تصوير الفواتير / الإدخال النصي الحر الذكي
 """
 import os
 import re
@@ -36,25 +36,20 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 TYPE_LABELS = {"sale": "مبيعات", "expense": "مصاريف", "purchase": "مشتريات"}
 TYPE_ICONS = {"sale": "➕", "expense": "➖", "purchase": "🛒"}
 
-user_invoice_state = {}
-
 
 # ---------------- أمر البداية ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "أهلاً فيك! 👋\n\n"
-        "أنا بوت المحاسبة تبعك — بيشتغل لأي محل أو نشاط تجاري.\n\n"
-        "*اكتب بشكل طبيعي:*\n"
-        "`بيع سكر كيلو 50000` — أو أضف زبون: `بيع سكر 50000 زبون أحمد`\n"
-        "`مصروف فاتورة كهرباء 20000`\n"
-        "`مشترى بضاعة من المورد 100000`\n\n"
-        "*ديون:*\n"
-        "`دين لسامر 5000` — عليك دين لحدا\n"
-        "`دين من أحمد 100000` — إلك دين عند حدا\n"
-        "`تسديد سامر`\n\n"
-        "🎙️ *كمان تقدر ترسل رسالة صوتية* وبفهمها تلقائيًا!\n\n"
-        "استخدم الأزرار تحت للتقارير وعرض العمليات 👇"
+        "أنا بوت المحاسبة الذكي تبعك 📊\n\n"
+        "📸 *صور أي فاتورة ورقية* أو أرسلها كصورة وسأقوم بحفظها ومعالجة المخزون تلقائياً.\n"
+        "✍️ *اكتب براحتك بدون تعقيد:* \n"
+        "• `فاتورة شراء من شركة النماء بـ 150000`\n"
+        "• `بعت لأحمد بضاعة بـ 50000`\n"
+        "• `فاتورة كهرباء 20000`\n"
+        "• `دين لسامر 5000`\n\n"
+        "🎙️ أو أرسل رسالة صوتية وسأفهمها مباشرة!"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
@@ -65,7 +60,7 @@ async def add_transaction_reply(update: Update, tx_type: str, amount: float, des
     db.add_transaction(update.effective_user.id, tx_type, amount, desc, customer_name)
     icon = TYPE_ICONS[tx_type]
     label = TYPE_LABELS[tx_type]
-    extra = f" — زبون: {customer_name}" if customer_name else ""
+    extra = f" — الطرف: {customer_name}" if customer_name else ""
     await update.message.reply_text(
         f"{icon} تسجّل {label[:-1] if label.endswith('ات') else label} بمبلغ {amount:,.0f}"
         f" — {desc or 'بدون وصف'}{extra}"
@@ -165,14 +160,12 @@ async def recent_transactions_menu(update: Update, context: ContextTypes.DEFAULT
 # ---------------- قائمة الفواتير ----------------
 
 async def invoices_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    buttons = [
-        [InlineKeyboardButton("📄 فاتورة مبيع", callback_data="inv:sale")],
-        [InlineKeyboardButton("🛒 فاتورة شراء", callback_data="inv:purchase")],
-    ]
     await update.message.reply_text(
-        "📄 *إدارة الفواتير*\n\nاختر نوع الفاتورة التي تريد إصدارها:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        "📄 *إدارة الفواتير والعمليات*\n\n"
+        "بكل بساطة:\n"
+        "1️⃣ **صور الفاتورة بالكاميرا** وأرسلها كصورة 📸\n"
+        "2️⃣ أو **اكتب تفاصيل الفاتورة بأي أسلوب طبيعي** (مثل: `فاتورة شراء مواد بـ 100 ألف من شركة كذا`) وسأقوم بتسجيلها وتحديث المخزون تلقائياً!",
+        parse_mode="Markdown"
     )
 
 
@@ -222,28 +215,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "noop":
         return
 
-    if data == "inv:sale":
-        user_invoice_state[user_id] = "sale"
-        await query.edit_message_text(
-            "📄 *إصدار فاتورة مبيع*\n\n"
-            "أرسل تفاصيل الفاتورة برسالة واحدة:\n"
-            "`اسم الزبون | المادة: الكمية x السعر`\n\n"
-            "مثال:\n`أحمد | سكر: 2 x 50000, زيت: 1 x 150000`",
-            parse_mode="Markdown"
-        )
-        return
-
-    if data == "inv:purchase":
-        user_invoice_state[user_id] = "purchase"
-        await query.edit_message_text(
-            "🛒 *إصدار فاتورة شراء*\n\n"
-            "أرسل تفاصيل الفاتورة برسالة واحدة (لتضاف للمخزون تلقائياً):\n"
-            "`اسم المورد | المادة: الكمية x سعر الشراء`\n\n"
-            "مثال:\n`شركة النماء | أرز: 10 x 40000`",
-            parse_mode="Markdown"
-        )
-        return
-
     if data == "report:menu":
         buttons = [
             [InlineKeyboardButton("📅 اليوم", callback_data="report:today")],
@@ -287,140 +258,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         debt_id = int(data.split(":")[1])
         success = db.settle_debt(debt_id, user_id)
         if success:
-            await query.edit_message_text(f"✅ تم تسديد الدين رقم #{debt_id} بنجاح.")
+            await query.edit_message_text(f"✅ تم تسديد دين رقم #{debt_id} بنجاح.")
         else:
             await query.edit_message_text("⚠️ هالدين مو موجود أو تم تسديده مسبقًا.")
         return
 
 
-# ---------------- معالجة النصوص ----------------
-
-ARABIC_INDIC = "٠١٢٣٤٥٦٧٨٩"
-WESTERN = "0123456789"
-DIGIT_TABLE = str.maketrans(ARABIC_INDIC, WESTERN)
-
-SALE_KEYWORDS = ["بيع", "بعت"]
-EXPENSE_KEYWORDS = ["مصروف", "صرفت", "صرف"]
-PURCHASE_KEYWORDS = ["مشترى", "مشتريات", "اشتريت", "شراء"]
-SETTLE_KEYWORDS = ["تسديد", "سددت", "دفعت"]
-
-
-def normalize_digits(text: str) -> str:
-    return text.translate(DIGIT_TABLE)
-
-
-def extract_customer(text: str):
-    m = re.search(r"زبون\s+(\S+)", text)
-    if m:
-        name = m.group(1)
-        rest = text[:m.start()] + text[m.end():]
-        return name, rest
-    return None, text
-
-
-def extract_amount(text: str):
-    match = re.search(r"\d+(\.\d+)?", text)
-    if not match:
-        return None, text
-    amount = float(match.group())
-    rest = text[:match.start()] + text[match.end():]
-    return amount, rest
-
-
-def parse_debt(text: str):
-    m = re.search(r"دين\s+ل[ـ]?\s*(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)", text)
-    if m:
-        return "i_owe", m.group(1), float(m.group(2)), m.group(3).strip()
-    m = re.search(r"دين\s+من\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)", text)
-    if m:
-        return "owed_to_me", m.group(1), float(m.group(2)), m.group(3).strip()
-    m = re.search(r"لي\s+عند\s+(\S+)\s+(\d+(?:\.\d+)?)\s*(.*)", text)
-    if m:
-        return "owed_to_me", m.group(1), float(m.group(2)), m.group(3).strip()
-    return None
-
-
-def parse_settle_name(text: str):
-    for kw in SETTLE_KEYWORDS:
-        m = re.search(rf"{kw}\s+ل?(\S+)", text)
-        if m:
-            return m.group(1)
-    return None
-
-
-def parse_transaction(text: str):
-    if any(k in text for k in PURCHASE_KEYWORDS):
-        tx_type = "purchase"
-        keywords = PURCHASE_KEYWORDS
-    elif any(k in text for k in SALE_KEYWORDS):
-        tx_type = "sale"
-        keywords = SALE_KEYWORDS
-    elif any(k in text for k in EXPENSE_KEYWORDS):
-        tx_type = "expense"
-        keywords = EXPENSE_KEYWORDS
-    else:
-        return None
-
-    customer_name, text_no_customer = extract_customer(text)
-    amount, rest = extract_amount(text_no_customer)
-    if amount is None:
-        return None
-
-    for k in keywords:
-        rest = rest.replace(k, " ")
-    desc = " ".join(rest.split())
-    return tx_type, amount, desc, customer_name
-
+# ---------------- معالجة النصوص الذكية عبر الذكاء الاصطناعي ----------------
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = update.message.text.strip()
-    text = normalize_digits(raw_text)
-    lower = text.strip()
+    lower = raw_text.strip()
     user_id = update.effective_user.id
 
-    if user_id in user_invoice_state:
-        inv_type = user_invoice_state.pop(user_id)
-        try:
-            if "|" not in text:
-                await update.message.reply_text("❌ الصيغة خاطئة. يجب استخدام الرمز | للفصل بين الاسم والمواد.")
-                return
-            
-            parts = text.split("|")
-            party_name = parts[0].strip()
-            items_text = parts[1].strip()
-            
-            total_amount = 0
-            items_summary = []
-            
-            for item in items_text.split(","):
-                item_parts = item.split(":")
-                item_name = item_parts[0].strip()
-                calc = item_parts[1].strip().split("x")
-                qty = float(calc[0].strip())
-                price = float(calc[1].strip())
-                
-                subtotal = qty * price
-                total_amount += subtotal
-                items_summary.append(f"- {item_name}: {qty} × {price:,.0f}")
-                
-                is_p = (inv_type == "purchase")
-                db.update_product_stock_and_price(item_name, qty, buy_price=price if is_p else None, is_purchase=is_p)
-
-            tx_type = "purchase" if inv_type == "purchase" else "sale"
-            desc = f"فاتورة لـ {party_name}: " + ", ".join(items_summary)
-            db.add_transaction(user_id, tx_type, total_amount, desc, customer_name=party_name if inv_type == "sale" else None)
-
-            label = "فاتورة مبيع" if inv_type == "sale" else "فاتورة شراء"
-            await update.message.reply_text(
-                f"✅ تم إصدار وحفظ {label} بنجاح!\n\n"
-                f"👤 الطرف: {party_name}\n"
-                f"💰 الإجمالي: {total_amount:,.0f}\n"
-                f"⚙️ *(تم تحديث المخزون والحسابات تلقائياً)*"
-            )
-        except Exception as e:
-            await update.message.reply_text("❌ حدث خطأ بصيغة الفاتورة. تأكد من استخدام الرمز | وفصل الكمية بالسعر بـ x مثل: سكر: 2 x 50000")
-        return
-
+    # التعامل مع أزرار القائمة السفلية
     if lower == "📊 التقارير":
         await reports_menu(update, context)
         return
@@ -434,53 +285,25 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await invoices_menu(update, context)
         return
     if lower == "➕ بيع":
-        await update.message.reply_text("اكتب مثلاً: بيع سكر كيلو 50000\nأو مع زبون: بيع سكر 50000 زبون أحمد")
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `بيع بضاعة لأحمد بـ 50000`", parse_mode="Markdown")
         return
     if lower == "➖ مصروف":
-        await update.message.reply_text("اكتب مثلاً: مصروف فاتورة كهرباء 20000")
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `صرفت فاتورة كهرباء 20000`", parse_mode="Markdown")
         return
     if lower == "🛒 مشترى":
-        await update.message.reply_text("اكتب مثلاً: مشترى بضاعة من المورد 100000")
+        await update.message.reply_text("اكتب بأسلوبك الطبيعي، مثلاً: `اشتريت بضاعة من المورد بـ 100000`", parse_mode="Markdown")
         return
 
-    debt_result = parse_debt(text)
-    if debt_result:
-        direction, name, amount, note = debt_result
-        db.add_debt(user_id, direction, name, amount, note)
-        if direction == "i_owe":
-            await update.message.reply_text(f"✅ تسجّل: عليك دين لـ {name} بمبلغ {amount:,.0f}")
-        else:
-            await update.message.reply_text(f"✅ تسجّل: {name} إله عندك دين {amount:,.0f}")
-        return
-
-    if any(k in text for k in SETTLE_KEYWORDS):
-        name = parse_settle_name(text)
-        if name:
-            success, amount, direction = db.settle_debt_by_name(user_id, name)
-            if success:
-                await update.message.reply_text(f"✅ تم تسديد دين {name} بمبلغ {amount:,.0f}")
-            else:
-                await update.message.reply_text(f"ما لقيت دين مفتوح باسم {name}.")
-            return
-
-    tx_result = parse_transaction(text)
-    if tx_result:
-        tx_type, amount, desc, customer_name = tx_result
-        await add_transaction_reply(update, tx_type, amount, desc, customer_name)
-        return
-
+    # إرسال النص مباشرة إلى محلل الذكاء الاصطناعي لفهمه بغض النظر عن الصيغة
     if ai_parser.is_configured():
-        result = ai_parser.parse_text(text)
+        result = ai_parser.parse_text(raw_text)
         handled = await execute_ai_result(update, result)
         if handled:
             return
 
     await update.message.reply_text(
-        "ما فهمت عليك 🤔 جرب مثلاً:\n"
-        "`بيع سكر كيلو 50000`\n"
-        "`مصروف كهرباء 20000`\n"
-        "`مشترى بضاعة 100000`\n"
-        "`دين لسامر 5000`",
+        "ما فهمت عليك تماماً 🤔 جرب تصوير فاتورة 📸 أو اكتب بأسلوبك مثل:\n"
+        "`فاتورة شراء بـ 100 ألف` أو `مصروف كهرباء 20 ألف`",
         parse_mode="Markdown"
     )
 
@@ -494,6 +317,7 @@ async def execute_ai_result(update: Update, result: dict) -> bool:
     user_id = update.effective_user.id
 
     if action in ("sale", "expense", "purchase") and amount:
+        # إذا كانت مشتريات أو فاتورة يمكننا أيضاً تحديث المخزون افتراضياً إذا وجد تفاصيل بالوصف
         await add_transaction_reply(update, action, float(amount), desc, customer)
         return True
 
@@ -520,7 +344,7 @@ async def execute_ai_result(update: Update, result: dict) -> bool:
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_parser.is_configured():
-        await update.message.reply_text("🎙️ استقبال الصوت يحتاج تفعيل الذكاء الاصطناعي أولاً.")
+        await update.message.reply_text("🎙️ تحتاج تفعيل الذكاء الاصطناعي للصوت.")
         return
 
     await update.message.reply_text("🎧 عم أسمع...")
@@ -531,7 +355,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = ai_parser.parse_audio(audio_bytes, mime_type="audio/ogg")
     handled = await execute_ai_result(update, result)
     if not handled:
-        await update.message.reply_text("ما فهمت المقطع الصوتي 🤔 جرب تحكي بوضوح أكتر أو اكتب الرسالة نصًا.")
+        await update.message.reply_text("ما فهمت المقطع الصوتي 🤔 جرب تحكي بوضوح أكتر.")
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """التعامل مع تصوير الفاتورة عبر الكاميرا وتحليلها بالذكاء الاصطناعي"""
+    if not ai_parser.is_configured():
+        await update.message.reply_text("📸 قراءة الفواتير بالصور تتطلب تفعيل الذكاء الاصطناعي أولاً.")
+        return
+
+    await update.message.reply_text("🔍 عم أقرأ الفاتورة والصورة...")
+    
+    photo = update.message.photo[-1]
+    tg_file = await context.bot.get_file(photo.file_id)
+    photo_bytes = bytes(await tg_file.download_as_bytearray())
+
+    result = ai_parser.parse_image(photo_bytes, mime_type="image/jpeg")
+    handled = await execute_ai_result(update, result)
+    
+    if not handled:
+        await update.message.reply_text("⚠️ ما قدرت استخرج تفاصيل الفاتورة بدقة من الصورة. تأكد أن الصورة واضحة.")
 
 
 def main():
@@ -541,6 +384,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
 
     logger.info("البوت شغّال...")
@@ -549,3 +393,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+        
