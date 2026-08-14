@@ -1,11 +1,6 @@
 """
 بوت محاسبة عام لأي محل تجاري - عبر تيليغرام
 يدعم: بيع / مصروف / مشترى / ديون / تقارير بفترات مختلفة + الفواتير وإدارة المخزون
-
-طريقة التشغيل:
-1. pip install -r requirements.txt
-2. حط التوكن تبعك بمتغير البيئة TELEGRAM_BOT_TOKEN
-3. python bot.py
 """
 import os
 import re
@@ -41,7 +36,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 TYPE_LABELS = {"sale": "مبيعات", "expense": "مصاريف", "purchase": "مشتريات"}
 TYPE_ICONS = {"sale": "➕", "expense": "➖", "purchase": "🛒"}
 
-# متغير لتتبع حالة إدخال الفواتير للمستخدمين
 user_invoice_state = {}
 
 
@@ -129,7 +123,7 @@ async def show_report(query, user_id: int, period: str):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 
-# ---------------- عرض قوائم العمليات (مع حذف) ----------------
+# ---------------- عرض قوائم العمليات ----------------
 
 async def show_transactions_list(query, user_id: int, tx_type: str, period: str = None):
     since = get_since_for_period(period) if period else None
@@ -217,7 +211,7 @@ async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 
-# ---------------- استقبال ضغطات الأزرار (Callback) ----------------
+# ---------------- استقبال الأزرار ----------------
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -299,7 +293,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# ---------------- فهم الرسائل الحرة (عربي طبيعي) ----------------
+# ---------------- معالجة النصوص ----------------
 
 ARABIC_INDIC = "٠١٢٣٤٥٦٧٨٩"
 WESTERN = "0123456789"
@@ -315,6 +309,15 @@ def normalize_digits(text: str) -> str:
     return text.translate(DIGIT_TABLE)
 
 
+def extract_customer(text: str):
+    m = re.search(r"زبون\s+(\S+)", text)
+    if m:
+        name = m.group(1)
+        rest = text[:m.start()] + text[m.end():]
+        return name, rest
+    return None, text
+
+
 def extract_amount(text: str):
     match = re.search(r"\d+(\.\d+)?", text)
     if not match:
@@ -322,16 +325,6 @@ def extract_amount(text: str):
     amount = float(match.group())
     rest = text[:match.start()] + text[match.end():]
     return amount, rest
-
-
-def extract_customer(text: str):
-    """يكتشف 'زبون اسم' بالجملة ويرجع (الاسم أو None, النص بدونه)"""
-    m = re.search(r"زبون\s+(\S+)", text)
-    if m:
-        name = m.group(1)
-        rest = text[:m.start()] + text[m.end():]
-        return name, rest
-    return None, text
 
 
 def parse_debt(text: str):
@@ -356,7 +349,6 @@ def parse_settle_name(text: str):
 
 
 def parse_transaction(text: str):
-    tx_type = None
     if any(k in text for k in PURCHASE_KEYWORDS):
         tx_type = "purchase"
         keywords = PURCHASE_KEYWORDS
@@ -384,10 +376,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = update.message.text.strip()
     text = normalize_digits(raw_text)
     lower = text.strip()
-
     user_id = update.effective_user.id
 
-    # ---- معالجة إدخال الفاتورة إذا كان المستخدم ينتظر إدخال موادها ----
     if user_id in user_invoice_state:
         inv_type = user_invoice_state.pop(user_id)
         try:
@@ -418,7 +408,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             tx_type = "purchase" if inv_type == "purchase" else "sale"
             desc = f"فاتورة لـ {party_name}: " + ", ".join(items_summary)
-            db.add_transaction(user_id, tx_type, total_amount, desc, customer_name=party_name if inv_type=="sale" else None)
+            db.add_transaction(user_id, tx_type, total_amount, desc, customer_name=party_name if inv_type == "sale" else None)
 
             label = "فاتورة مبيع" if inv_type == "sale" else "فاتورة شراء"
             await update.message.reply_text(
@@ -431,7 +421,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ حدث خطأ بصيغة الفاتورة. تأكد من استخدام الرمز | وفصل الكمية بالسعر بـ x مثل: سكر: 2 x 50000")
         return
 
-    # ---- أزرار لوحة المفاتيح ----
     if lower == "📊 التقارير":
         await reports_menu(update, context)
         return
@@ -454,7 +443,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("اكتب مثلاً: مشترى بضاعة من المورد 100000")
         return
 
-    # ---- ديون ----
     debt_result = parse_debt(text)
     if debt_result:
         direction, name, amount, note = debt_result
@@ -465,7 +453,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ تسجّل: {name} إله عندك دين {amount:,.0f}")
         return
 
-    # ---- تسديد دين ----
     if any(k in text for k in SETTLE_KEYWORDS):
         name = parse_settle_name(text)
         if name:
@@ -476,14 +463,12 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"ما لقيت دين مفتوح باسم {name}.")
             return
 
-    # ---- بيع / مصروف / مشترى ----
     tx_result = parse_transaction(text)
     if tx_result:
         tx_type, amount, desc, customer_name = tx_result
         await add_transaction_reply(update, tx_type, amount, desc, customer_name)
         return
 
-    # ---- لم تفهمها القواعد الثابتة: جرب الذكاء الاصطناعي ----
     if ai_parser.is_configured():
         result = ai_parser.parse_text(text)
         handled = await execute_ai_result(update, result)
@@ -501,7 +486,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def execute_ai_result(update: Update, result: dict) -> bool:
-    """ينفذ نتيجة الذكاء الاصطناعي. يرجع True لو نجح بتنفيذ إجراء معروف"""
     action = result.get("action")
     amount = result.get("amount")
     desc = result.get("description") or ""
@@ -515,12 +499,12 @@ async def execute_ai_result(update: Update, result: dict) -> bool:
 
     if action == "debt_i_owe" and person and amount:
         db.add_debt(user_id, "i_owe", person, float(amount), desc)
-        await update.message.reply_text(f"✅ (بالذكاء الاصطناعي) تسجّل: عليك دين لـ {person} بمبلغ {float(amount):,.0f}")
+        await update.message.reply_text(f"✅ تسجّل: عليك دين لـ {person} بمبلغ {float(amount):,.0f}")
         return True
 
     if action == "debt_owed_to_me" and person and amount:
         db.add_debt(user_id, "owed_to_me", person, float(amount), desc)
-        await update.message.reply_text(f"✅ (بالذكاء الاصطناعي) تسجّل: {person} إله عندك دين {float(amount):,.0f}")
+        await update.message.reply_text(f"✅ تسجّل: {person} إله عندك دين {float(amount):,.0f}")
         return True
 
     if action == "settle" and person:
@@ -536,6 +520,32 @@ async def execute_ai_result(update: Update, result: dict) -> bool:
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_parser.is_configured():
-        await update.message.reply_text(
-            "🎙️ استقبال الصوت يحتاج تفعيل الذكاء الاصطناعي أولاً.\n"
-      
+        await update.message.reply_text("🎙️ استقبال الصوت يحتاج تفعيل الذكاء الاصطناعي أولاً.")
+        return
+
+    await update.message.reply_text("🎧 عم أسمع...")
+    voice = update.message.voice
+    tg_file = await context.bot.get_file(voice.file_id)
+    audio_bytes = bytes(await tg_file.download_as_bytearray())
+
+    result = ai_parser.parse_audio(audio_bytes, mime_type="audio/ogg")
+    handled = await execute_ai_result(update, result)
+    if not handled:
+        await update.message.reply_text("ما فهمت المقطع الصوتي 🤔 جرب تحكي بوضوح أكتر أو اكتب الرسالة نصًا.")
+
+
+def main():
+    db.init_db()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
+
+    logger.info("البوت شغّال...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
