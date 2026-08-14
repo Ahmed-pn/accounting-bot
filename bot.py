@@ -210,10 +210,8 @@ def sell_from_inventory(user_id: int, item_name: str, quantity: float, customer_
         total_amount = item["sell_price"] * quantity
         new_qty = item["quantity"] - quantity
 
-        # تحديث الكمية بالمخزون
         cur.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_qty, item["id"]))
         
-        # تسجيل عملية البيع
         cur.execute(
             "INSERT INTO transactions (user_id, type, amount, description, customer_name, created_at) VALUES (?, 'sale', ?, ?, ?, ?)",
             (user_id, total_amount, f"بيع {quantity} من {item['name']}", customer_name, datetime.now().isoformat())
@@ -539,4 +537,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tx_id = int(data.split(":")[1])
         tx = get_transaction_by_id(tx_id, user_id)
         if tx:
-            date_str = tx["create
+            date_str = tx["created_at"].split("T")[0]
+            invoice_text = (
+          
