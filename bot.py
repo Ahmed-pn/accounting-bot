@@ -289,14 +289,14 @@ def _call_gemini_structured(contents):
     أنت مساعد محاسب ذكي لمتجر أو محل تجاري. قم بتحليل النص أو الصورة أو الصوت المستلم واستخرج البيانات بدقة بصيغة JSON فقط دون أي نص إضافي بالشكل التالي:
     {
       "action": "sale" أو "expense" أو "purchase" أو "debt_i_owe" أو "debt_owed_to_me" أو "settle" أو "add_inventory",
-      "amount": رقم المبلغ الإجمالي (أو الصافي بالفاتورة)،
+      "amount": رقم المبلغ الإجمالي (أو الصافي بالفاتورة),
       "description": "وصف تفصيلي أو المواد الموجودة بالفاتورة",
-      "customer_name": "اسم الزبون (في حال المبيعات)",
-      "person_name": "اسم الشخص (في حال الديون أو التسديد)",
-      "item_name": "اسم المادة أو المنتج (في حال المخزون)",
-      "sell_price": سعر البيع (رقم),
-      "buy_price": سعر الشراء (رقم),
-      "quantity": الكمية (رقم)
+      "customer_name": "اسم الزبون",
+      "person_name": "اسم الشخص",
+      "item_name": "اسم المادة",
+      "sell_price": سعر البيع,
+      "buy_price": سعر الشراء,
+      "quantity": الكمية
     }
     """
     try:
@@ -333,11 +333,11 @@ def parse_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "أهلاً فيك! 👋\n\n"
-        "أنا بوت المحاسبة الذكي والمخزون تبعك 📊\n\n"
-        "📦 من زر *المخزون* تقدر تدير منتجاتك وأسعارها.\n"
-        "📄 من زر *الفواتير* وتفاصيل العمليات تقدر تصدر فواتير فورية للزبائن.\n"
-        "✍️ أو اكتب بأسلوبك الطبيعي أو ابعت صوت وسأتولى الباقي!"
+        "أهلاً فيك! \n\n"
+        "أنا بوت المحاسبة الذكي والمخزون تبعك \n\n"
+        " من زر المخزون تقدر تدير منتجاتك وأسعارها.\n"
+        " من زر الفواتير وتفاصيل العمليات تقدر تصدر فواتير فورية للزبائن.\n"
+        " أو اكتب بأسلوبك الطبيعي أو ابعت صوت وسأتولى الباقي!"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
@@ -352,8 +352,7 @@ async def add_transaction_reply(update: Update, tx_type: str, amount: float, des
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🧾 فاتورة البيع", callback_data=f"invoice:{tx_id}")]])
 
     await update.message.reply_text(
-        f"{icon} تسجّل {label[:-1] if label.endswith('ات') else label} بمبلغ {amount:,.0f}"
-        f" — {desc or 'بدون وصف'}{extra}",
+        f"{icon} تسجّل {label} بمبلغ {amount:,.0f} — {desc or 'بدون وصف'}{extra}",
         reply_markup=reply_markup
     )
 
@@ -384,8 +383,7 @@ async def invoices_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📥 إصدار فاتورة شراء", callback_data="inv:purchase")],
     ]
     await update.message.reply_text(
-        "📄 *إدارة الفواتير*\n\n"
-        "اختر نوع الفاتورة التي تريد إصدارها أو تسجيلها، ثم قم بتصويرها أو كتابة تفاصيلها:",
+        "📄 *إدارة الفواتير*\n\nاختر نوع الفاتورة:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -398,10 +396,7 @@ async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📆 هالشهر", callback_data="report:month")],
         [InlineKeyboardButton("📈 هالسنة", callback_data="report:year")],
     ]
-    await update.message.reply_text(
-        "📊 اختار الفترة يلي بدك التقرير فيها:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    await update.message.reply_text("📊 اختار الفترة:", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 PERIOD_LABELS = {"today": "اليوم", "week": "هالأسبوع", "month": "هالشهر", "year": "هالسنة"}
@@ -421,21 +416,15 @@ async def show_report(query, user_id: int, period: str):
     sales, expenses, purchases, net = get_balance(user_id, since=since)
     label = PERIOD_LABELS[period]
 
-    text = (
-        f"📊 *تقرير {label}*\n\n"
-        f"➕ مبيعات: {sales:,.0f}\n"
-        f"➖ مصاريف: {expenses:,.0f}\n"
-        f"🛒 مشتريات: {purchases:,.0f}\n"
-        f"{'🟢' if net >= 0 else '🔴'} *الصافي: {net:,.0f}*"
-    )
+    text = f"📊 *تقرير {label}*\n\n➕ مبيعات: {sales:,.0f}\n➖ مصاريف: {expenses:,.0f}\n🛒 مشتريات: {purchases:,.0f}\nالصافي: {net:,.0f}"
 
     buttons = [
         [
-            InlineKeyboardButton("➕ تفاصيل المبيعات", callback_data=f"list:sale:{period}"),
-            InlineKeyboardButton("➖ تفاصيل المصاريف", callback_data=f"list:expense:{period}"),
+            InlineKeyboardButton("➕ مبيعات", callback_data=f"list:sale:{period}"),
+            InlineKeyboardButton("➖ مصاريف", callback_data=f"list:expense:{period}"),
         ],
-        [InlineKeyboardButton("🛒 تفاصيل المشتريات", callback_data=f"list:purchase:{period}")],
-        [InlineKeyboardButton("🔙 رجوع للفترات", callback_data="report:menu")],
+        [InlineKeyboardButton("🛒 مشتريات", callback_data=f"list:purchase:{period}")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="report:menu")],
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -444,22 +433,19 @@ async def show_transactions_list(query, user_id: int, tx_type: str, period: str 
     since = get_since_for_period(period) if period else None
     rows = get_transactions(user_id, tx_type=tx_type, since=since, limit=15)
     label = TYPE_LABELS[tx_type]
-    icon = TYPE_ICONS[tx_type]
 
     if not rows:
-        text = f"{icon} ما في {label} مسجلة بهالفترة."
+        text = f"ما في {label} مسجلة."
         buttons = [[InlineKeyboardButton("🔙 رجوع", callback_data=f"report:{period}" if period else "menu:transactions")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    text = f"{icon} *{label}"
-    text += f" ({PERIOD_LABELS[period]})*\n\n" if period else "*\n\n"
+    text = f"*{label}*\n\n"
     buttons = []
     for tx in rows:
-        tx_id, _, amount, desc, customer, created_at = tx["id"], tx["type"], tx["amount"], tx["description"], tx["customer_name"], tx["created_at"]
+        tx_id, amount, desc, customer, created_at = tx["id"], tx["amount"], tx["description"], tx["customer_name"], tx["created_at"]
         date_str = created_at.split("T")[0]
-        extra = f" - {customer}" if customer else ""
-        text += f"#{tx_id}  {amount:,.0f} — {desc or ''}{extra} ({date_str})\n"
+        text += f"#{tx_id} - {amount:,.0f} ({date_str})\n"
         buttons.append([InlineKeyboardButton(f"🗑️ حذف #{tx_id}", callback_data=f"del:{tx_id}:{tx_type}:{period or 'all'}")])
 
     buttons.append([InlineKeyboardButton("🔙 رجوع", callback_data=f"report:{period}" if period else "menu:transactions")])
@@ -468,11 +454,11 @@ async def show_transactions_list(query, user_id: int, tx_type: str, period: str 
 
 async def recent_transactions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [
-        [InlineKeyboardButton("➕ آخر المبيعات", callback_data="list:sale:all")],
-        [InlineKeyboardButton("➖ آخر المصاريف", callback_data="list:expense:all")],
-        [InlineKeyboardButton("🛒 آخر المشتريات", callback_data="list:purchase:all")],
+        [InlineKeyboardButton("➕ المبيعات", callback_data="list:sale:all")],
+        [InlineKeyboardButton("➖ المصاريف", callback_data="list:expense:all")],
+        [InlineKeyboardButton("🛒 المشتريات", callback_data="list:purchase:all")],
     ]
-    await update.message.reply_text("📋 شو بدك تشوف؟", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("📋 اختر القائمة:", reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -481,31 +467,25 @@ async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     i_owe = get_open_debts(user_id, "i_owe")
 
     if not owed_to_me and not i_owe:
-        await update.message.reply_text("💳 ما في ديون مفتوحة حاليًا. 🎉")
+        await update.message.reply_text("💳 لا توجد ديون مفتوحة حالياً.")
         return
 
     buttons = []
-    text = "💳 *الديون المفتوحة*\n\nاضغط (سدد ✅) لتسديد أي دين مباشرة.\n\n*إلك عند غيرك:*"
+    text = "💳 *الديون المفتوحة*\n\n*إلك عند غيرك:*"
     for debt in owed_to_me:
-        debt_id, name, amount, note = debt["id"], debt["person_name"], debt["amount"], debt["note"]
-        label = f"{name}: {amount:,.0f}" + (f" ({note})" if note else "")
+        debt_id, name, amount = debt["id"], debt["person_name"], debt["amount"]
         buttons.append([
-            InlineKeyboardButton(f"👤 {label}", callback_data="noop"),
+            InlineKeyboardButton(f"{name}: {amount:,.0f}", callback_data="noop"),
             InlineKeyboardButton("سدد ✅", callback_data=f"settle:{debt_id}")
         ])
-    if not owed_to_me:
-        text += "\n  ما في."
 
     text += "\n\n*عليك لغيرك:*"
     for debt in i_owe:
-        debt_id, name, amount, note = debt["id"], debt["person_name"], debt["amount"], debt["note"]
-        label = f"{name}: {amount:,.0f}" + (f" ({note})" if note else "")
+        debt_id, name, amount = debt["id"], debt["person_name"], debt["amount"]
         buttons.append([
-            InlineKeyboardButton(f"👤 {label}", callback_data="noop"),
+            InlineKeyboardButton(f"{name}: {amount:,.0f}", callback_data="noop"),
             InlineKeyboardButton("سدد ✅", callback_data=f"settle:{debt_id}")
         ])
-    if not i_owe:
-        text += "\n  ما في."
 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -521,7 +501,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "inv_add_prompt":
         await query.message.reply_text(
-            "➕ *إضافة منتج للمخزون*\n\nاكتب بالصيغة التالية:\n`إضافة منتج [الاسم] بيع [السعر] شراء [السعر] كمية [الكمية]`",
+            "➕ *إضافة منتج*\nاكتب بالشكل: `إضافة منتج [الاسم] بيع [السعر] شراء [السعر] كمية [الكمية]`",
             parse_mode="Markdown"
         )
         return
@@ -529,7 +509,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("inv_del:"):
         item_id = int(data.split(":")[1])
         delete_inventory_item(item_id, user_id)
-        await query.answer("✅ تم حذف المنتج من المخزون", show_alert=False)
+        await query.answer("✅ تم الحذف")
         await inventory_menu(query, context)
         return
 
@@ -537,6 +517,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tx_id = int(data.split(":")[1])
         tx = get_transaction_by_id(tx_id, user_id)
         if tx:
-            date_str = tx["created_at"].split("T")[0]
-            invoice_text = (
-          
+            invoice_text = f"🧾 *فاتورة مبيعات*\nرقم: #{tx['id']}\nالمبلغ: *{tx['amount']:,.0f}*"
+            await query.message.reply_text(invoice_text, parse_mode="Markdown")
+        return
+
+    if data.startswith("inv:"):
+        inv_type = data.split(":")[1]
+        msg = "📤 قم بتصوير أو كتابة تفاصيل فاتورة المبيعات." if inv_type == "sale" else "📥 قم بتصوير أو كتابة تفاصيل فاتورة الشراء."
+        await query.edit_message_text(msg)
+        return
+
+    if data == "report:menu":
+        await reports_menu(query, context)
+        return
+
+    if data.startswith("report:"):
+        period = data.split(":")[1]
+        await show_report(query, user_id, period)
+        return
+
+    if data.startswith("list:"):
+        _, tx_type, period = data.split(":")
+        period = None if period == "all" else period
+        await show_transactions_list(query, user_id, tx_type, period)
+        return
+
+    if data == "menu:transactions":
+        await recent_transactions_menu(query, context)
+        return
+
+    if data.startswith("del:"):
+        _, tx_id, tx_type, period
