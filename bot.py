@@ -1,6 +1,6 @@
 """
 بوت محاسبة عام لأي محل تجاري - عبر تيليغرام
-يدعم: بيع / مصروف / مشترى / ديون / تقارير بفترات مختلفة
+يدعم: بيع / مصروف / مشترى / ديون / تقارير بفترات مختلفة + الفواتير وإدارة المخزون
 
 طريقة التشغيل:
 1. pip install -r requirements.txt
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["➕ بيع", "➖ مصروف", "🛒 مشترى"],
+        ["📄 الفواتير"],
         ["📊 التقارير", "📋 آخر العمليات"],
         ["💳 الديون"],
     ],
@@ -39,6 +40,9 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 
 TYPE_LABELS = {"sale": "مبيعات", "expense": "مصاريف", "purchase": "مشتريات"}
 TYPE_ICONS = {"sale": "➕", "expense": "➖", "purchase": "🛒"}
+
+# متغير لتتبع حالة إدخال الفواتير للمستخدمين
+user_invoice_state = {}
 
 
 # ---------------- أمر البداية ----------------
@@ -164,6 +168,20 @@ async def recent_transactions_menu(update: Update, context: ContextTypes.DEFAULT
     )
 
 
+# ---------------- قائمة الفواتير ----------------
+
+async def invoices_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("📄 فاتورة مبيع", callback_data="inv:sale")],
+        [InlineKeyboardButton("🛒 فاتورة شراء", callback_data="inv:purchase")],
+    ]
+    await update.message.reply_text(
+        "📄 *إدارة الفواتير*\n\nاختر نوع الفاتورة التي تريد إصدارها:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
 # ---------------- الديون ----------------
 
 async def list_debts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,6 +226,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if data == "noop":
+        return
+
+    if data == "inv:sale":
+        user_invoice_state[user_id] = "sale"
+        await query.edit_message_text(
+            "📄 *إصدار فاتورة مبيع*\n\n"
+            "أرسل تفاصيل الفاتورة برسالة واحدة:\n"
+            "`اسم الزبون | المادة: الكمية x السعر`\n\n"
+            "مثال:\n`أحمد | سكر: 2 x 50000, زيت: 1 x 150000`",
+            parse_mode="Markdown"
+        )
+        return
+
+    if data == "inv:purchase":
+        user_invoice_state[user_id] = "purchase"
+        await query.edit_message_text(
+            "🛒 *إصدار فاتورة شراء*\n\n"
+            "أرسل تفاصيل الفاتورة برسالة واحدة (لتضاف للمخزون تلقائياً):\n"
+            "`اسم المورد | المادة: الكمية x سعر الشراء`\n\n"
+            "مثال:\n`شركة النماء | أرز: 10 x 40000`",
+            parse_mode="Markdown"
+        )
         return
 
     if data == "report:menu":
@@ -345,6 +385,52 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = normalize_digits(raw_text)
     lower = text.strip()
 
+    user_id = update.effective_user.id
+
+    # ---- معالجة إدخال الفاتورة إذا كان المستخدم ينتظر إدخال موادها ----
+    if user_id in user_invoice_state:
+        inv_type = user_invoice_state.pop(user_id)
+        try:
+            if "|" not in text:
+                await update.message.reply_text("❌ الصيغة خاطئة. يجب استخدام الرمز | للفصل بين الاسم والمواد.")
+                return
+            
+            parts = text.split("|")
+            party_name = parts[0].strip()
+            items_text = parts[1].strip()
+            
+            total_amount = 0
+            items_summary = []
+            
+            for item in items_text.split(","):
+                item_parts = item.split(":")
+                item_name = item_parts[0].strip()
+                calc = item_parts[1].strip().split("x")
+                qty = float(calc[0].strip())
+                price = float(calc[1].strip())
+                
+                subtotal = qty * price
+                total_amount += subtotal
+                items_summary.append(f"- {item_name}: {qty} × {price:,.0f}")
+                
+                is_p = (inv_type == "purchase")
+                db.update_product_stock_and_price(item_name, qty, buy_price=price if is_p else None, is_purchase=is_p)
+
+            tx_type = "purchase" if inv_type == "purchase" else "sale"
+            desc = f"فاتورة لـ {party_name}: " + ", ".join(items_summary)
+            db.add_transaction(user_id, tx_type, total_amount, desc, customer_name=party_name if inv_type=="sale" else None)
+
+            label = "فاتورة مبيع" if inv_type == "sale" else "فاتورة شراء"
+            await update.message.reply_text(
+                f"✅ تم إصدار وحفظ {label} بنجاح!\n\n"
+                f"👤 الطرف: {party_name}\n"
+                f"💰 الإجمالي: {total_amount:,.0f}\n"
+                f"⚙️ *(تم تحديث المخزون والحسابات تلقائياً)*"
+            )
+        except Exception as e:
+            await update.message.reply_text("❌ حدث خطأ بصيغة الفاتورة. تأكد من استخدام الرمز | وفصل الكمية بالسعر بـ x مثل: سكر: 2 x 50000")
+        return
+
     # ---- أزرار لوحة المفاتيح ----
     if lower == "📊 التقارير":
         await reports_menu(update, context)
@@ -355,6 +441,9 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if lower == "💳 الديون":
         await list_debts(update, context)
         return
+    if lower == "📄 الفواتير":
+        await invoices_menu(update, context)
+        return
     if lower == "➕ بيع":
         await update.message.reply_text("اكتب مثلاً: بيع سكر كيلو 50000\nأو مع زبون: بيع سكر 50000 زبون أحمد")
         return
@@ -364,8 +453,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if lower == "🛒 مشترى":
         await update.message.reply_text("اكتب مثلاً: مشترى بضاعة من المورد 100000")
         return
-
-    user_id = update.effective_user.id
 
     # ---- ديون ----
     debt_result = parse_debt(text)
@@ -451,35 +538,4 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_parser.is_configured():
         await update.message.reply_text(
             "🎙️ استقبال الصوت يحتاج تفعيل الذكاء الاصطناعي أولاً.\n"
-            "لسا ما تم إضافة مفتاح Gemini بإعدادات البوت."
-        )
-        return
-
-    await update.message.reply_text("🎧 عم أسمع...")
-    voice = update.message.voice
-    tg_file = await context.bot.get_file(voice.file_id)
-    audio_bytes = bytes(await tg_file.download_as_bytearray())
-
-    result = ai_parser.parse_audio(audio_bytes, mime_type="audio/ogg")
-    handled = await execute_ai_result(update, result)
-    if not handled:
-        await update.message.reply_text(
-            "ما فهمت المقطع الصوتي 🤔 جرب تحكي بوضوح أكتر أو اكتب الرسالة نصًا."
-        )
-
-
-def main():
-    db.init_db()
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
-
-    logger.info("البوت شغّال...")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+      
