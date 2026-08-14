@@ -43,6 +43,7 @@ def init_db():
 @contextmanager
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
         yield conn
     finally:
@@ -106,55 +107,32 @@ def get_transactions(user_id: int, tx_type: str = None, since: str = None, limit
         return cur.fetchall()
 
 
-def get_today_since_iso():
-    return datetime.combine(date.today(), datetime.min.time()).isoformat()
+# ---------- إدارة الديون ----------
 
-
-def get_week_since_iso():
-    today = date.today()
-    start = today - timedelta(days=today.weekday())  # يبدأ الاثنين
-    return datetime.combine(start, datetime.min.time()).isoformat()
-
-
-def get_month_since_iso():
-    today = date.today()
-    return datetime(today.year, today.month, 1).isoformat()
-
-
-def get_year_since_iso():
-    today = date.today()
-    return datetime(today.year, 1, 1).isoformat()
-
-
-# ---------- الديون ----------
-
-def add_debt(user_id: int, direction: str, person_name: str, amount: float, note: str = ""):
+def add_debt(user_id: int, direction: str, person_name: str, amount: float, note: str):
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO debts (user_id, direction, person_name, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO debts (user_id, direction, person_name, amount, note, settled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
             (user_id, direction, person_name, amount, note, datetime.now().isoformat())
         )
         conn.commit()
-        return cur.lastrowid
 
 
-def get_open_debts(user_id: int, direction: str = None):
+def get_open_debts(user_id: int, direction: str):
     with get_conn() as conn:
         cur = conn.cursor()
-        query = "SELECT id, direction, person_name, amount, note FROM debts WHERE user_id = ? AND settled = 0"
-        params = [user_id]
-        if direction:
-            query += " AND direction = ?"
-            params.append(direction)
-        cur.execute(query, params)
+        cur.execute(
+            "SELECT id, direction, person_name, amount, note FROM debts WHERE user_id = ? AND direction = ? AND settled = 0 ORDER BY id DESC",
+            (user_id, direction)
+        )
         return cur.fetchall()
 
 
-def settle_debt(debt_id: int, user_id: int):
+def settle_debt(debt_id: int, user_id: int) -> bool:
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE debts SET settled = 1 WHERE id = ? AND user_id = ?", (debt_id, user_id))
+        cur.execute("UPDATE debts SET settled = 1 WHERE id = ? AND user_id = ? AND settled = 0", (debt_id, user_id))
         conn.commit()
         return cur.rowcount > 0
 
@@ -163,13 +141,29 @@ def settle_debt_by_name(user_id: int, person_name: str):
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, amount, direction FROM debts WHERE user_id = ? AND person_name = ? AND settled = 0 ORDER BY created_at DESC LIMIT 1",
-            (user_id, person_name)
+            "SELECT id, amount, direction FROM debts WHERE user_id = ? AND person_name LIKE ? AND settled = 0 LIMIT 1",
+            (user_id, f"%{person_name}%")
         )
         row = cur.fetchone()
         if not row:
-            return False, None, None
-        debt_id, amount, direction = row
+            return False, 0, ""
+        debt_id, amount, direction = row["id"], row["amount"], row["direction"]
         cur.execute("UPDATE debts SET settled = 1 WHERE id = ?", (debt_id,))
         conn.commit()
         return True, amount, direction
+
+
+# ---------- مساعدات الفترات الزمنية للتقارير ----------
+
+def get_today_since_iso():
+    return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+def get_week_since_iso():
+    return (datetime.now() - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+def get_month_since_iso():
+    return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+def get_year_since_iso():
+    return datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    
